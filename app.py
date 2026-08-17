@@ -315,21 +315,47 @@ def mostrar_formulario_insertar(conn, tabla):
                 columnas,
                 valores
             )
+            # --------------------------------------
+            # ALERTA DE ÉXITO
+            # --------------------------------------
 
             st.success(
-                "✅ Registro agregado correctamente."
+                f"✅ ¡Registro agregado correctamente a la tabla `{tabla}`!"
             )
 
-            # Actualizar la información mostrada
-            st.rerun()
 
         except Exception as e:
 
-            st.error(
-                "❌ No se pudo insertar el registro."
-            )
+            mensaje = str(e)
 
-            st.exception(e)
+            if "UNIQUE constraint failed" in mensaje:
+
+                st.warning(
+                    "⚠️ El registro no es válido. "
+                    "Uno de los valores ingresados ya existe. "
+                    "Verifica que el ID no esté repetido."
+                )
+
+            elif "FOREIGN KEY constraint failed" in mensaje:
+
+                st.warning(
+                    "⚠️ El registro no es válido. "
+                    "Una de las referencias ingresadas no existe."
+                )
+
+            elif "NOT NULL constraint failed" in mensaje:
+
+                st.warning(
+                    "⚠️ El registro no es válido. "
+                    "Debes completar todos los campos obligatorios."
+                )
+
+            else:
+
+                st.warning(
+                    "⚠️ No se pudo guardar el registro. "
+                    "Verifica que los datos ingresados sean válidos."
+                )
 
 
 # ==================================================
