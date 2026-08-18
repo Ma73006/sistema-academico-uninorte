@@ -4,9 +4,9 @@ import pandas as pd
 from datetime import date
 
 
-# ==================================================
-# CONFIGURACIÓN DE LA PÁGINA
-# ==================================================
+# ============================================================
+# CONFIGURACIÓN
+# ============================================================
 
 st.set_page_config(
     page_title="Sistema Académico Uninorte",
@@ -15,9 +15,9 @@ st.set_page_config(
 )
 
 
-# ==================================================
+# ============================================================
 # CONEXIÓN A SQLITE CLOUD
-# ==================================================
+# ============================================================
 
 @st.cache_resource
 def conectar_bd():
@@ -32,9 +32,9 @@ def conectar_bd():
     return sqlitecloud.connect(connection_string)
 
 
-# ==================================================
-# TABLAS ACADÉMICAS PERMITIDAS
-# ==================================================
+# ============================================================
+# TABLAS ACADÉMICAS
+# ============================================================
 
 def obtener_tablas():
 
@@ -55,13 +55,13 @@ def obtener_tablas():
     ]
 
 
-# ==================================================
-# OBTENER COLUMNAS DE UNA TABLA
-# ==================================================
+# ============================================================
+# OBTENER DATOS
+# ============================================================
 
-def obtener_columnas(conn, tabla):
+def obtener_datos(conn, tabla):
 
-    consulta = f'PRAGMA table_info("{tabla}")'
+    consulta = f'SELECT * FROM "{tabla}"'
 
     return pd.read_sql(
         consulta,
@@ -69,24 +69,372 @@ def obtener_columnas(conn, tabla):
     )
 
 
-# ==================================================
-# CREAR CAMPO SEGÚN EL TIPO DE DATO
-# ==================================================
+# ============================================================
+# OBTENER COLUMNAS
+# ============================================================
 
-def crear_campo(nombre, tipo, obligatorio=False):
+@st.cache_data(ttl=300, show_spinner=False)
+def obtener_columnas_cache(tabla):
+
+    """
+    Obtiene las columnas de una tabla.
+
+    Se utiliza una conexión independiente para que
+    la información de estructura quede almacenada
+    temporalmente en caché.
+    """
+
+    try:
+
+        conn = conectar_bd()
+
+        consulta = (
+            f'SELECT * FROM "{tabla}" LIMIT 0'
+        )
+
+        datos = pd.read_sql(
+            consulta,
+            conn
+        )
+
+        columnas = []
+
+        for nombre in datos.columns:
+
+            columnas.append({
+                "name": nombre,
+                "type": str(datos[nombre].dtype)
+            })
+
+        return pd.DataFrame(columnas)
+
+    except Exception:
+
+        return pd.DataFrame()
+
+
+# ============================================================
+# INFORMACIÓN DE COLUMNAS
+# ============================================================
+
+@st.cache_data(ttl=300, show_spinner=False)
+def obtener_info_columnas_cache(tabla):
+
+    """
+    Obtiene:
+
+    - nombre
+    - tipo
+    - NOT NULL
+    - PRIMARY KEY
+    """
+
+    try:
+
+        conn = conectar_bd()
+
+        cursor = conn.cursor()
+
+        consulta = (
+            f'PRAGMA table_info("{tabla}")'
+        )
+
+        cursor.execute(
+            consulta
+        )
+
+        filas = cursor.fetchall()
+
+        cursor.close()
+
+        info = []
+
+        for fila in filas:
+
+            if len(fila) >= 6:
+
+                info.append({
+
+                    "name": fila[1],
+
+                    "type": fila[2],
+
+                    "notnull": bool(
+                        fila[3]
+                    ),
+
+                    "pk": bool(
+                        fila[5]
+                    )
+
+                })
+
+        if info:
+
+            return pd.DataFrame(info)
+
+    except Exception:
+
+        pass
+
+
+    # ========================================================
+    # RESPALDO
+    # ========================================================
+
+    columnas = obtener_columnas_cache(
+        tabla
+    )
+
+    if not columnas.empty:
+
+        columnas[
+            "notnull"
+        ] = False
+
+        columnas[
+            "pk"
+        ] = False
+
+        return columnas
+
+    return pd.DataFrame()
+
+
+# ============================================================
+# DETECTAR FOREIGN KEYS
+# ============================================================
+
+@st.cache_data(ttl=300, show_spinner=False)
+def obtener_foreign_keys_cache(tabla):
+
+    """
+    Detecta automáticamente las Foreign Keys.
+
+    Ejemplo:
+
+    id_programa
+        ↓
+    programa.id_programa
+    """
+
+    try:
+
+        conn = conectar_bd()
+
+        cursor = conn.cursor()
+
+        consulta = (
+            f'PRAGMA foreign_key_list("{tabla}")'
+        )
+
+        cursor.execute(
+            consulta
+        )
+
+        filas = cursor.fetchall()
+
+        cursor.close()
+
+        foreign_keys = {}
+
+        for fila in filas:
+
+            if len(fila) >= 5:
+
+                columna_local = fila[3]
+
+                tabla_referencia = fila[2]
+
+                columna_referencia = fila[4]
+
+                foreign_keys[
+                    columna_local
+                ] = {
+
+                    "tabla_referencia":
+                        tabla_referencia,
+
+                    "columna_referencia":
+                        columna_referencia
+                }
+
+        return foreign_keys
+
+    except Exception:
+
+        return {}
+
+
+# ============================================================
+# BUSCAR COLUMNA AMIGABLE
+# ============================================================
+
+@st.cache_data(ttl=300, show_spinner=False)
+def encontrar_columna_mostrar_cache(
+    tabla,
+    columna_id
+):
+
+    try:
+
+        conn = conectar_bd()
+
+        datos = obtener_datos(
+            conn,
+            tabla
+        )
+
+        if datos.empty:
+
+            return columna_id
+
+        columnas = datos.columns.tolist()
+
+        nombres_preferidos = [
+
+            "nombre",
+            "nombres",
+            "name",
+            "descripcion",
+            "description",
+            "titulo",
+            "nombre_programa",
+            "nombre_asignatura",
+            "nombre_profesor",
+            "nombre_departamento",
+            "nombre_salon"
+
+        ]
+
+        for preferida in nombres_preferidos:
+
+            if preferida in columnas:
+
+                return preferida
+
+        # ----------------------------------------------------
+        # Buscar columna que no sea ID
+        # ----------------------------------------------------
+
+        columnas_no_id = [
+
+            columna
+
+            for columna in columnas
+
+            if columna != columna_id
+
+            and "id_" not in columna.lower()
+
+            and not columna.lower().endswith("_id")
+
+        ]
+
+        if columnas_no_id:
+
+            return columnas_no_id[0]
+
+        return columna_id
+
+    except Exception:
+
+        return columna_id
+
+
+# ============================================================
+# OBTENER OPCIONES FOREIGN KEY
+# ============================================================
+
+@st.cache_data(ttl=60, show_spinner=False)
+def obtener_opciones_fk_cache(
+    tabla_referencia,
+    columna_id
+):
+
+    try:
+
+        conn = conectar_bd()
+
+        datos = obtener_datos(
+            conn,
+            tabla_referencia
+        )
+
+        if datos.empty:
+
+            return []
+
+        if columna_id not in datos.columns:
+
+            return []
+
+        columna_mostrar = (
+            encontrar_columna_mostrar_cache(
+                tabla_referencia,
+                columna_id
+            )
+        )
+
+        if columna_mostrar not in datos.columns:
+
+            columna_mostrar = columna_id
+
+        opciones = []
+
+        for _, fila in datos.iterrows():
+
+            valor_id = fila[
+                columna_id
+            ]
+
+            valor_mostrar = fila[
+                columna_mostrar
+            ]
+
+            opciones.append(
+                (
+                    valor_id,
+                    valor_mostrar
+                )
+            )
+
+        return opciones
+
+    except Exception:
+
+        return []
+
+
+# ============================================================
+# CREAR CAMPO NORMAL
+# ============================================================
+
+def crear_campo_normal(
+    nombre,
+    tipo,
+    obligatorio=False
+):
+
+    etiqueta = nombre.replace(
+        "_",
+        " "
+    ).title()
+
+    if obligatorio:
+
+        etiqueta += " *"
 
     tipo = str(tipo).upper()
 
-    etiqueta = nombre.replace("_", " ").title()
+    # --------------------------------------------------------
+    # ENTEROS
+    # --------------------------------------------------------
 
-    if obligatorio:
-        etiqueta += " *"
-
-    # ----------------------------------------------
-    # NÚMEROS ENTEROS
-    # ----------------------------------------------
-
-    if "INT" in tipo:
+    if (
+        "INT" in tipo
+        or "INTEGER" in tipo
+    ):
 
         return st.number_input(
             etiqueta,
@@ -95,14 +443,14 @@ def crear_campo(nombre, tipo, obligatorio=False):
             format="%d"
         )
 
-    # ----------------------------------------------
-    # NÚMEROS DECIMALES
-    # ----------------------------------------------
+    # --------------------------------------------------------
+    # DECIMALES
+    # --------------------------------------------------------
 
     elif (
-        "REAL" in tipo
-        or "FLOAT" in tipo
+        "FLOAT" in tipo
         or "DOUBLE" in tipo
+        or "REAL" in tipo
         or "DECIMAL" in tipo
         or "NUMERIC" in tipo
     ):
@@ -112,9 +460,9 @@ def crear_campo(nombre, tipo, obligatorio=False):
             value=0.0
         )
 
-    # ----------------------------------------------
+    # --------------------------------------------------------
     # FECHAS
-    # ----------------------------------------------
+    # --------------------------------------------------------
 
     elif "DATE" in tipo:
 
@@ -123,9 +471,9 @@ def crear_campo(nombre, tipo, obligatorio=False):
             value=date.today()
         )
 
-    # ----------------------------------------------
+    # --------------------------------------------------------
     # TEXTO
-    # ----------------------------------------------
+    # --------------------------------------------------------
 
     else:
 
@@ -134,63 +482,154 @@ def crear_campo(nombre, tipo, obligatorio=False):
         )
 
 
-# ==================================================
-# CONVERTIR VALORES AL TIPO CORRECTO
-# ==================================================
+# ============================================================
+# CREAR FOREIGN KEY
+# ============================================================
 
-def convertir_valor(valor, tipo):
+def crear_campo_foreign_key(
+    nombre,
+    relacion,
+    obligatorio=False
+):
 
-    tipo = str(tipo).upper()
+    tabla_referencia = relacion[
+        "tabla_referencia"
+    ]
 
-    # ----------------------------------------------
-    # TEXTO VACÍO
-    # ----------------------------------------------
+    columna_referencia = relacion[
+        "columna_referencia"
+    ]
 
-    if isinstance(valor, str) and valor.strip() == "":
+    opciones = obtener_opciones_fk_cache(
+        tabla_referencia,
+        columna_referencia
+    )
+
+    etiqueta = nombre.replace(
+        "_",
+        " "
+    ).title()
+
+    if obligatorio:
+
+        etiqueta += " *"
+
+    # --------------------------------------------------------
+    # NO HAY OPCIONES
+    # --------------------------------------------------------
+
+    if not opciones:
+
+        st.warning(
+            f"⚠️ No existen opciones disponibles "
+            f"para {etiqueta}."
+        )
+
         return None
 
-    # ----------------------------------------------
-    # FECHA
-    # ----------------------------------------------
 
-    if "DATE" in tipo:
+    # --------------------------------------------------------
+    # CREAR OPCIONES VISUALES
+    # --------------------------------------------------------
 
-        if isinstance(valor, date):
-            return valor.isoformat()
+    opciones_visuales = []
+
+    mapa_valores = {}
+
+    for valor_id, valor_mostrar in opciones:
+
+        texto = (
+            f"{valor_mostrar} "
+            f"(ID: {valor_id})"
+        )
+
+        opciones_visuales.append(
+            texto
+        )
+
+        mapa_valores[
+            texto
+        ] = valor_id
+
+
+    # --------------------------------------------------------
+    # SELECTBOX
+    # --------------------------------------------------------
+
+    seleccion = st.selectbox(
+        etiqueta,
+        opciones_visuales,
+        key=(
+            f"fk_{nombre}_"
+            f"{tabla_referencia}"
+        )
+    )
+
+    return mapa_valores[
+        seleccion
+    ]
+
+
+# ============================================================
+# CONVERTIR VALORES
+# ============================================================
+
+def convertir_valor(valor):
+
+    if isinstance(
+        valor,
+        date
+    ):
+
+        return valor.isoformat()
+
+    if isinstance(
+        valor,
+        str
+    ):
+
+        if valor.strip() == "":
+
+            return None
+
+        return valor.strip()
 
     return valor
 
 
-# ==================================================
+# ============================================================
 # INSERTAR REGISTRO
-# ==================================================
+# ============================================================
 
-def insertar_registro(conn, tabla, columnas, valores):
+def insertar_registro(
+    conn,
+    tabla,
+    valores
+):
 
-    nombres = []
+    nombres = list(
+        valores.keys()
+    )
 
     datos = []
 
-    for i, columna in columnas.iterrows():
+    for nombre in nombres:
 
-        nombre = columna["name"]
-        tipo = columna["type"]
-
-        nombres.append(nombre)
-
-        valor = convertir_valor(
-            valores[nombre],
-            tipo
+        datos.append(
+            convertir_valor(
+                valores[nombre]
+            )
         )
 
-        datos.append(valor)
+    nombres_sql = ", ".join(
+        [
+            f'"{nombre}"'
+            for nombre in nombres
+        ]
+    )
 
     placeholders = ", ".join(
         ["?"] * len(nombres)
-    )
-
-    nombres_sql = ", ".join(
-        [f'"{nombre}"' for nombre in nombres]
     )
 
     consulta = f"""
@@ -207,54 +646,119 @@ def insertar_registro(conn, tabla, columnas, valores):
     conn.commit()
 
 
-# ==================================================
-# MOSTRAR FORMULARIO DE INSERCIÓN
-# ==================================================
+# ============================================================
+# FORMULARIO DE INSERTAR
+# ============================================================
 
-def mostrar_formulario_insertar(conn, tabla):
+def mostrar_formulario_insertar(
+    conn,
+    tabla
+):
 
     st.subheader(
         f"➕ Agregar registro a `{tabla}`"
     )
 
-    columnas = obtener_columnas(
-        conn,
+    # --------------------------------------------------------
+    # INFORMACIÓN DE COLUMNAS
+    # --------------------------------------------------------
+
+    columnas = obtener_info_columnas_cache(
         tabla
     )
 
     if columnas.empty:
 
-        st.warning(
-            "⚠️ No se pudieron encontrar las columnas de esta tabla."
+        st.info(
+            "La información de la tabla está "
+            "cargando. Intenta nuevamente."
         )
 
         return
 
+
+    # --------------------------------------------------------
+    # FOREIGN KEYS
+    # --------------------------------------------------------
+
+    foreign_keys = obtener_foreign_keys_cache(
+        tabla
+    )
+
     st.info(
-        "Los campos marcados con * son obligatorios."
+        "Completa los campos y presiona "
+        "**Guardar registro**.\n\n"
+        "Los campos marcados con * son obligatorios. "
+        "Las llaves foráneas se seleccionan "
+        "automáticamente."
     )
 
     valores = {}
+
+    formulario_valido = True
+
+
+    # ========================================================
+    # FORMULARIO
+    # ========================================================
 
     with st.form(
         key=f"form_insertar_{tabla}"
     ):
 
-        # ------------------------------------------
-        # CREAR LOS CAMPOS
-        # ------------------------------------------
-
         for _, columna in columnas.iterrows():
 
-            nombre = columna["name"]
-            tipo = columna["type"]
-            notnull = columna["notnull"]
+            nombre = columna[
+                "name"
+            ]
 
-            valores[nombre] = crear_campo(
-                nombre,
-                tipo,
-                obligatorio=bool(notnull)
+            tipo = columna[
+                "type"
+            ]
+
+            obligatorio = bool(
+                columna.get(
+                    "notnull",
+                    False
+                )
             )
+
+
+            # =================================================
+            # FOREIGN KEY
+            # =================================================
+
+            if nombre in foreign_keys:
+
+                valor = crear_campo_foreign_key(
+                    nombre,
+                    foreign_keys[nombre],
+                    obligatorio
+                )
+
+                if valor is None:
+
+                    formulario_valido = False
+
+                valores[
+                    nombre
+                ] = valor
+
+
+            # =================================================
+            # CAMPO NORMAL
+            # =================================================
+
+            else:
+
+                valores[
+                    nombre
+                ] = crear_campo_normal(
+                    nombre,
+                    tipo,
+                    obligatorio
+                )
+
 
         st.write("")
 
@@ -263,104 +767,115 @@ def mostrar_formulario_insertar(conn, tabla):
             use_container_width=True
         )
 
-    # ----------------------------------------------
+
+    # ========================================================
     # GUARDAR
-    # ----------------------------------------------
+    # ========================================================
 
     if guardar:
 
+        if not formulario_valido:
+
+            st.warning(
+                "⚠️ No se puede guardar el registro "
+                "porque una de las llaves foráneas "
+                "no tiene opciones disponibles."
+            )
+
+            return
+
         try:
-
-            # --------------------------------------
-            # VALIDAR CAMPOS OBLIGATORIOS
-            # --------------------------------------
-
-            errores = []
-
-            for _, columna in columnas.iterrows():
-
-                nombre = columna["name"]
-                notnull = columna["notnull"]
-
-                valor = valores[nombre]
-
-                if notnull:
-
-                    if valor is None:
-
-                        errores.append(
-                            f"El campo `{nombre}` es obligatorio."
-                        )
-
-                    elif isinstance(valor, str) and not valor.strip():
-
-                        errores.append(
-                            f"El campo `{nombre}` es obligatorio."
-                        )
-
-            if errores:
-
-                for error in errores:
-                    st.error(f"❌ {error}")
-
-                return
-
-            # --------------------------------------
-            # INSERTAR
-            # --------------------------------------
 
             insertar_registro(
                 conn,
                 tabla,
-                columnas,
                 valores
             )
-            # --------------------------------------
-            # ALERTA DE ÉXITO
-            # --------------------------------------
+
+            # ------------------------------------------------
+            # LIMPIAR CACHÉ DE DATOS
+            # ------------------------------------------------
+
+            obtener_opciones_fk_cache.clear()
 
             st.success(
-                f"✅ ¡Registro agregado correctamente a la tabla `{tabla}`!"
+                f"✅ ¡Registro agregado correctamente "
+                f"a la tabla `{tabla}`!"
             )
+
+            st.rerun()
 
 
         except Exception as e:
 
             mensaje = str(e)
 
-            if "UNIQUE constraint failed" in mensaje:
+
+            # ------------------------------------------------
+            # UNIQUE
+            # ------------------------------------------------
+
+            if (
+                "UNIQUE constraint failed"
+                in mensaje
+            ):
 
                 st.warning(
                     "⚠️ El registro no es válido. "
-                    "Uno de los valores ingresados ya existe. "
-                    "Verifica que el ID no esté repetido."
+                    "Uno de los valores ingresados "
+                    "ya existe. Verifica que el ID "
+                    "no esté repetido."
                 )
 
-            elif "FOREIGN KEY constraint failed" in mensaje:
+
+            # ------------------------------------------------
+            # FOREIGN KEY
+            # ------------------------------------------------
+
+            elif (
+                "FOREIGN KEY constraint failed"
+                in mensaje
+            ):
 
                 st.warning(
                     "⚠️ El registro no es válido. "
-                    "Una de las referencias ingresadas no existe."
+                    "Una de las referencias ingresadas "
+                    "no existe."
                 )
 
-            elif "NOT NULL constraint failed" in mensaje:
+
+            # ------------------------------------------------
+            # NOT NULL
+            # ------------------------------------------------
+
+            elif (
+                "NOT NULL constraint failed"
+                in mensaje
+            ):
 
                 st.warning(
                     "⚠️ El registro no es válido. "
-                    "Debes completar todos los campos obligatorios."
+                    "Debes completar todos los "
+                    "campos obligatorios."
                 )
+
+
+            # ------------------------------------------------
+            # OTRO ERROR
+            # ------------------------------------------------
 
             else:
 
                 st.warning(
                     "⚠️ No se pudo guardar el registro. "
-                    "Verifica que los datos ingresados sean válidos."
+                    "Verifica que los datos ingresados "
+                    "sean válidos."
                 )
 
 
-# ==================================================
+# ============================================================
 # CONSULTAR TABLA
-# ==================================================
+# ============================================================
 
 def consultar_tabla(
     conn,
@@ -372,13 +887,16 @@ def consultar_tabla(
     direccion="ASC"
 ):
 
-    consulta = f'SELECT * FROM "{tabla}"'
+    consulta = (
+        f'SELECT * FROM "{tabla}"'
+    )
 
     parametros = []
 
-    # ----------------------------------------------
+
+    # ========================================================
     # WHERE
-    # ----------------------------------------------
+    # ========================================================
 
     if (
         columna_filtro
@@ -388,69 +906,110 @@ def consultar_tabla(
     ):
 
         if operador == "Igual a":
+
             sql_operador = "="
-            parametros.append(valor_filtro)
+
+            parametros.append(
+                valor_filtro
+            )
 
         elif operador == "Diferente de":
+
             sql_operador = "!="
-            parametros.append(valor_filtro)
+
+            parametros.append(
+                valor_filtro
+            )
 
         elif operador == "Contiene":
+
             sql_operador = "LIKE"
+
             parametros.append(
                 f"%{valor_filtro}%"
             )
 
         elif operador == "Empieza por":
+
             sql_operador = "LIKE"
+
             parametros.append(
                 f"{valor_filtro}%"
             )
 
         elif operador == "Termina en":
+
             sql_operador = "LIKE"
+
             parametros.append(
                 f"%{valor_filtro}"
             )
 
         elif operador == "Mayor que":
+
             sql_operador = ">"
-            parametros.append(valor_filtro)
+
+            parametros.append(
+                valor_filtro
+            )
 
         elif operador == "Menor que":
+
             sql_operador = "<"
-            parametros.append(valor_filtro)
+
+            parametros.append(
+                valor_filtro
+            )
 
         elif operador == "Mayor o igual":
+
             sql_operador = ">="
-            parametros.append(valor_filtro)
+
+            parametros.append(
+                valor_filtro
+            )
 
         elif operador == "Menor o igual":
+
             sql_operador = "<="
-            parametros.append(valor_filtro)
+
+            parametros.append(
+                valor_filtro
+            )
 
         else:
+
             sql_operador = "="
-            parametros.append(valor_filtro)
+
+            parametros.append(
+                valor_filtro
+            )
+
 
         consulta += (
             f' WHERE "{columna_filtro}" '
             f'{sql_operador} ?'
         )
 
-    # ----------------------------------------------
+
+    # ========================================================
     # ORDER BY
-    # ----------------------------------------------
+    # ========================================================
 
     if columna_orden:
 
-        if direccion not in ["ASC", "DESC"]:
+        if direccion not in [
+            "ASC",
+            "DESC"
+        ]:
+
             direccion = "ASC"
 
         consulta += (
             f' ORDER BY "{columna_orden}" '
             f'{direccion}'
         )
+
 
     return pd.read_sql(
         consulta,
@@ -459,38 +1018,65 @@ def consultar_tabla(
     )
 
 
-# ==================================================
+# ============================================================
 # INTERFAZ DE CONSULTA
-# ==================================================
+# ============================================================
 
-def mostrar_consulta(conn, tabla):
+def mostrar_consulta(
+    conn,
+    tabla
+):
 
     st.subheader(
         f"🔎 Consultar `{tabla}`"
     )
 
-    columnas = obtener_columnas(
-        conn,
+    columnas = obtener_columnas_cache(
         tabla
     )
+
+    if columnas.empty:
+
+        st.info(
+            "La información de la tabla está "
+            "cargando. Intenta nuevamente."
+        )
+
+        return
+
 
     nombres_columnas = columnas[
         "name"
     ].tolist()
 
-    # ==================================================
-    # FILTROS
-    # ==================================================
+    if not nombres_columnas:
 
-    st.markdown("### 🔍 Filtrar registros")
+        st.info(
+            "La información de la tabla está "
+            "cargando. Intenta nuevamente."
+        )
+
+        return
+
+
+    # ========================================================
+    # FILTRO
+    # ========================================================
+
+    st.markdown(
+        "### 🔍 Filtrar registros"
+    )
 
     activar_filtro = st.checkbox(
         "Activar filtro"
     )
 
     columna_filtro = None
+
     operador = None
+
     valor_filtro = None
+
 
     if activar_filtro:
 
@@ -526,11 +1112,14 @@ def mostrar_consulta(conn, tabla):
                 "Valor:"
             )
 
-    # ==================================================
-    # ORDENAMIENTO
-    # ==================================================
 
-    st.markdown("### ↕️ Ordenar resultados")
+    # ========================================================
+    # ORDENAR
+    # ========================================================
+
+    st.markdown(
+        "### ↕️ Ordenar resultados"
+    )
 
     col1, col2 = st.columns(2)
 
@@ -538,7 +1127,9 @@ def mostrar_consulta(conn, tabla):
 
         columna_orden = st.selectbox(
             "Ordenar por:",
-            ["Sin ordenar"] + nombres_columnas
+            [
+                "Sin ordenar"
+            ] + nombres_columnas
         )
 
     with col2:
@@ -551,21 +1142,28 @@ def mostrar_consulta(conn, tabla):
             ]
         )
 
+
     if columna_orden == "Sin ordenar":
+
         columna_orden_sql = None
 
     else:
+
         columna_orden_sql = columna_orden
 
+
     if direccion_texto == "Ascendente":
+
         direccion = "ASC"
 
     else:
+
         direccion = "DESC"
 
-    # ==================================================
-    # BOTÓN DE CONSULTA
-    # ==================================================
+
+    # ========================================================
+    # BOTÓN CONSULTAR
+    # ========================================================
 
     if st.button(
         "🔍 Consultar",
@@ -607,25 +1205,25 @@ def mostrar_consulta(conn, tabla):
                     hide_index=True
                 )
 
-        except Exception as e:
+        except Exception:
 
-            st.error(
-                "❌ Error al realizar la consulta."
+            st.warning(
+                "⚠️ No se pudo realizar la consulta. "
+                "Verifica los datos ingresados."
             )
 
-            st.exception(e)
 
-    # ==================================================
-    # MOSTRAR TODOS LOS REGISTROS
-    # ==================================================
+    # ========================================================
+    # TABLA INICIAL
+    # ========================================================
 
     else:
 
         try:
 
-            datos = pd.read_sql(
-                f'SELECT * FROM "{tabla}"',
-                conn
+            datos = obtener_datos(
+                conn,
+                tabla
             )
 
             st.markdown(
@@ -639,21 +1237,21 @@ def mostrar_consulta(conn, tabla):
             )
 
             st.write(
-                f"**Total de registros:** {len(datos)}"
+                f"**Total de registros:** "
+                f"{len(datos)}"
             )
 
-        except Exception as e:
+        except Exception:
 
-            st.error(
-                "❌ No se pudieron obtener los registros."
+            st.info(
+                "No se pudieron cargar los registros "
+                "en este momento."
             )
 
-            st.exception(e)
 
-
-# ==================================================
+# ============================================================
 # PROGRAMA PRINCIPAL
-# ==================================================
+# ============================================================
 
 try:
 
@@ -661,9 +1259,10 @@ try:
 
     tablas = obtener_tablas()
 
-    # ==================================================
+
+    # ========================================================
     # TÍTULO
-    # ==================================================
+    # ========================================================
 
     st.title(
         "🎓 Sistema Académico - Universidad del Norte"
@@ -677,9 +1276,10 @@ try:
         "🟢 Conexión exitosa con SQLite Cloud"
     )
 
-    # ==================================================
+
+    # ========================================================
     # SIDEBAR
-    # ==================================================
+    # ========================================================
 
     st.sidebar.title(
         "🎓 Sistema Académico"
@@ -705,9 +1305,31 @@ try:
         "ser modificados ni eliminados."
     )
 
-    # ==================================================
+    # ========================================================
+    # BOTÓN ACTUALIZAR
+    # ========================================================
+
+    if st.sidebar.button(
+        "🔄 Actualizar información",
+        use_container_width=True
+    ):
+
+        obtener_columnas_cache.clear()
+
+        obtener_info_columnas_cache.clear()
+
+        obtener_foreign_keys_cache.clear()
+
+        encontrar_columna_mostrar_cache.clear()
+
+        obtener_opciones_fk_cache.clear()
+
+        st.rerun()
+
+
+    # ========================================================
     # INICIO
-    # ==================================================
+    # ========================================================
 
     if opcion == "🏠 Inicio":
 
@@ -722,10 +1344,6 @@ try:
         )
 
         st.divider()
-
-        # ----------------------------------------------
-        # MÉTRICAS
-        # ----------------------------------------------
 
         st.subheader(
             "📊 Información de la base de datos"
@@ -744,30 +1362,32 @@ try:
 
             st.metric(
                 "☁️ Base de datos",
-                st.secrets["database"]["database"]
+                st.secrets[
+                    "database"
+                ][
+                    "database"
+                ]
             )
 
         st.divider()
-
-        # ----------------------------------------------
-        # TABLAS
-        # ----------------------------------------------
 
         st.subheader(
             "🗂️ Tablas académicas"
         )
 
-        columnas = st.columns(3)
+        columnas_metricas = st.columns(3)
 
         for i, tabla in enumerate(tablas):
 
-            with columnas[i % 3]:
+            with columnas_metricas[
+                i % 3
+            ]:
 
                 try:
 
-                    datos = pd.read_sql(
-                        f'SELECT * FROM "{tabla}"',
-                        conn
+                    datos = obtener_datos(
+                        conn,
+                        tabla
                     )
 
                     st.metric(
@@ -784,9 +1404,10 @@ try:
                         tabla
                     )
 
-    # ==================================================
+
+    # ========================================================
     # CONSULTAR
-    # ==================================================
+    # ========================================================
 
     elif opcion == "🔎 Consultar registros":
 
@@ -806,9 +1427,10 @@ try:
             tabla_seleccionada
         )
 
-    # ==================================================
+
+    # ========================================================
     # AGREGAR
-    # ==================================================
+    # ========================================================
 
     elif opcion == "➕ Agregar registro":
 
@@ -841,14 +1463,17 @@ try:
         )
 
 
-# ==================================================
-# MANEJO DE ERRORES
-# ==================================================
+# ============================================================
+# ERROR GENERAL
+# ============================================================
 
-except Exception as e:
+except Exception:
 
     st.error(
-        "❌ No se pudo conectar con la base de datos"
+        "❌ No se pudo conectar con la base de datos."
     )
 
-    st.exception(e)
+    st.warning(
+        "Verifica la configuración de conexión "
+        "con SQLite Cloud e inténtalo nuevamente."
+    )
