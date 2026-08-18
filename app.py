@@ -73,24 +73,16 @@ def obtener_datos(conn, tabla):
 # OBTENER COLUMNAS
 # ============================================================
 
-@st.cache_data(ttl=300, show_spinner=False)
-def obtener_columnas_cache(tabla):
+def obtener_columnas(conn, tabla):
 
     """
     Obtiene las columnas de una tabla.
-
-    Se utiliza una conexión independiente para que
-    la información de estructura quede almacenada
-    temporalmente en caché.
+    No guarda errores en caché.
     """
 
     try:
 
-        conn = conectar_bd()
-
-        consulta = (
-            f'SELECT * FROM "{tabla}" LIMIT 0'
-        )
+        consulta = f'SELECT * FROM "{tabla}" LIMIT 0'
 
         datos = pd.read_sql(
             consulta,
@@ -117,8 +109,7 @@ def obtener_columnas_cache(tabla):
 # INFORMACIÓN DE COLUMNAS
 # ============================================================
 
-@st.cache_data(ttl=300, show_spinner=False)
-def obtener_info_columnas_cache(tabla):
+def obtener_info_columnas(conn, tabla):
 
     """
     Obtiene:
@@ -130,8 +121,6 @@ def obtener_info_columnas_cache(tabla):
     """
 
     try:
-
-        conn = conectar_bd()
 
         cursor = conn.cursor()
 
@@ -182,19 +171,16 @@ def obtener_info_columnas_cache(tabla):
     # RESPALDO
     # ========================================================
 
-    columnas = obtener_columnas_cache(
+    columnas = obtener_columnas(
+        conn,
         tabla
     )
 
     if not columnas.empty:
 
-        columnas[
-            "notnull"
-        ] = False
+        columnas["notnull"] = False
 
-        columnas[
-            "pk"
-        ] = False
+        columnas["pk"] = False
 
         return columnas
 
@@ -205,22 +191,16 @@ def obtener_info_columnas_cache(tabla):
 # DETECTAR FOREIGN KEYS
 # ============================================================
 
-@st.cache_data(ttl=300, show_spinner=False)
-def obtener_foreign_keys_cache(tabla):
+def obtener_foreign_keys(
+    conn,
+    tabla
+):
 
     """
     Detecta automáticamente las Foreign Keys.
-
-    Ejemplo:
-
-    id_programa
-        ↓
-    programa.id_programa
     """
 
     try:
-
-        conn = conectar_bd()
 
         cursor = conn.cursor()
 
@@ -663,7 +643,8 @@ def mostrar_formulario_insertar(
     # INFORMACIÓN DE COLUMNAS
     # --------------------------------------------------------
 
-    columnas = obtener_info_columnas_cache(
+    columnas = obtener_info_columnas(
+        conn,
         tabla
     )
 
@@ -681,7 +662,8 @@ def mostrar_formulario_insertar(
     # FOREIGN KEYS
     # --------------------------------------------------------
 
-    foreign_keys = obtener_foreign_keys_cache(
+    foreign_keys = obtener_foreign_keys(
+        conn,
         tabla
     )
 
@@ -793,7 +775,7 @@ def mostrar_formulario_insertar(
             )
 
             # ------------------------------------------------
-            # LIMPIAR CACHÉ DE DATOS
+            # LIMPIAR CACHÉ DE LAS OPCIONES FK
             # ------------------------------------------------
 
             obtener_opciones_fk_cache.clear()
@@ -1031,7 +1013,8 @@ def mostrar_consulta(
         f"🔎 Consultar `{tabla}`"
     )
 
-    columnas = obtener_columnas_cache(
+    columnas = obtener_columnas(
+        conn,
         tabla
     )
 
@@ -1305,6 +1288,7 @@ try:
         "ser modificados ni eliminados."
     )
 
+
     # ========================================================
     # BOTÓN ACTUALIZAR
     # ========================================================
@@ -1313,16 +1297,6 @@ try:
         "🔄 Actualizar información",
         use_container_width=True
     ):
-
-        obtener_columnas_cache.clear()
-
-        obtener_info_columnas_cache.clear()
-
-        obtener_foreign_keys_cache.clear()
-
-        encontrar_columna_mostrar_cache.clear()
-
-        obtener_opciones_fk_cache.clear()
 
         st.rerun()
 
